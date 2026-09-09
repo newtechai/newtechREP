@@ -12,11 +12,11 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
-      - name: Wait for a possible Pages preview
-        run: sleep 25
-      - name: Probe common preview aliases
+      - name: Wait for a possible production deployment
+        run: sleep 55
+      - name: Probe preview aliases and production fingerprint
         shell: bash
         run: |
           set -u
@@ -33,10 +33,26 @@ jobs:
               echo
             } >> "$report" 2>&1
           done
+
+          {
+            echo '===== PRODUCTION ROOT ====='
+            curl --silent --show-error --location --connect-timeout 10 --max-time 25 \
+              --dump-header production-headers.txt \
+              https://newtechtransit.com/ -o production.html || true
+            cat production-headers.txt 2>/dev/null || true
+            echo '----- FINGERPRINTS -----'
+            grep -nE 'build-version|padding:clamp\(72px,7vw,104px\)|Pilotez vos opérations|Centralisez vos opérations|Voyons comment|Découvrez comment' production.html || true
+            echo '----- SIZE -----'
+            wc -c production.html 2>/dev/null || true
+          } >> "$report" 2>&1
+
           cat "$report"
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: cloudflare-pages-link-report
-          path: pages-link-report.txt
+          path: |
+            pages-link-report.txt
+            production.html
+            production-headers.txt
           retention-days: 1

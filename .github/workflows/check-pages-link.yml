@@ -1,0 +1,42 @@
+name: Check Cloudflare Pages link
+
+on:
+  push:
+    branches:
+      - pages-link-probe-0909
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wait for a possible Pages preview
+        run: sleep 25
+      - name: Probe common preview aliases
+        shell: bash
+        run: |
+          set -u
+          report=pages-link-report.txt
+          : > "$report"
+          for url in \
+            'https://pages-link-probe-0909.newtechtransit-vitrine.pages.dev/pages-link-probe.txt' \
+            'https://64958b14.newtechtransit-vitrine.pages.dev/pages-link-probe.txt' \
+            'https://newtechtransit-vitrine.pages.dev/pages-link-probe.txt'; do
+            {
+              echo "===== $url ====="
+              curl --silent --show-error --location --connect-timeout 10 --max-time 25 \
+                --dump-header - "$url" || true
+              echo
+            } >> "$report" 2>&1
+          done
+          cat "$report"
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-pages-link-report
+          path: pages-link-report.txt
+          retention-days: 1

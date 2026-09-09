@@ -1,0 +1,135 @@
+name: Apply vitrine CTA overlap fix
+
+on:
+  push:
+    branches:
+      - agent/fix-vitrine-cta-overlap
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-render-and-commit:
+    if: ${{ !contains(github.event.head_commit.message || '', '[vitrine-cta-fix-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-vitrine-cta-overlap
+          fetch-depth: 0
+
+      - name: Apply structural spacing and responsive safeguards
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('newtechtransit-vitrine.html')
+          html = path.read_text(encoding='utf-8')
+
+          replacements = {
+              '.cta-wrap{padding:0 0 100px}':
+                  '.cta-wrap{padding:clamp(72px,7vw,104px) 0 100px}',
+              '.cta{padding:48px 55px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:45px;':
+                  '.cta{padding:48px 55px;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:clamp(32px,4vw,52px);',
+              '.cta h2{color:#fff}':
+                  '.cta>div:first-child{min-width:0}.cta h2{max-width:20ch;color:#fff;overflow-wrap:anywhere;text-wrap:balance}',
+              '@media(max-width:980px){':
+                  '@media(max-width:1120px){.cta{grid-template-columns:1fr}.cta-side{justify-items:start}}\n    @media(max-width:980px){',
+              '.cta{grid-template-columns:1fr;text-align:center}.cta p{margin-inline:auto}':
+                  '.cta{grid-template-columns:1fr;text-align:center}.cta p{margin-inline:auto}.cta-side{justify-items:center}',
+              '.cta{padding:36px 23px}.foot{display:grid}':
+                  '.cta{padding:36px 23px}.cta-side{width:100%}.cta-side .btn{width:100%}.mail{max-width:100%;overflow-wrap:anywhere;white-space:normal;text-align:center}.foot{display:grid}',
+          }
+
+          for old, new in replacements.items():
+              if old not in html:
+                  raise SystemExit(f'Expected fragment not found: {old}')
+              html = html.replace(old, new, 1)
+
+          path.write_text(html, encoding='utf-8')
+          PY
+
+          git diff --check
+          git diff -- newtechtransit-vitrine.html | tee vitrine-cta-fix.diff
+
+      - name: Validate HTML and CSS guards
+        shell: bash
+        run: |
+          python - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+
+          class Parser(HTMLParser):
+              pass
+
+          path = Path('newtechtransit-vitrine.html')
+          html = path.read_text(encoding='utf-8')
+          Parser().feed(html)
+          required = [
+              'padding:clamp(72px,7vw,104px) 0 100px',
+              'grid-template-columns:minmax(0,1fr) auto',
+              'overflow-wrap:anywhere',
+              '@media(max-width:1120px)',
+              '.cta-side{justify-items:center}',
+              '.cta-side .btn{width:100%}',
+          ]
+          missing = [rule for rule in required if rule not in html]
+          if missing:
+              raise SystemExit(f'Missing responsive CTA rules: {missing}')
+          if '.cta-wrap{padding:0 0 100px}' in html:
+              raise SystemExit('Zero top padding is still present.')
+          print('HTML parsed and CTA collision guards verified.')
+          PY
+
+      - name: Render desktop, tablet and mobile evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m http.server 4173 >/tmp/vitrine-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          sleep 2
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "$browser" ]; then
+            echo 'No Chromium-compatible browser found on the runner.'
+            exit 1
+          fi
+          "$browser" --headless --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=2048,1000 --screenshot=cta-fixed-desktop.png \
+            'http://127.0.0.1:4173/newtechtransit-vitrine.html#contact'
+          "$browser" --headless --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=1100,1000 --screenshot=cta-fixed-tablet.png \
+            'http://127.0.0.1:4173/newtechtransit-vitrine.html#contact'
+          "$browser" --headless --no-sandbox --disable-gpu --hide-scrollbars \
+            --window-size=390,900 --screenshot=cta-fixed-mobile.png \
+            'http://127.0.0.1:4173/newtechtransit-vitrine.html#contact'
+          test -s cta-fixed-desktop.png
+          test -s cta-fixed-tablet.png
+          test -s cta-fixed-mobile.png
+
+      - name: Upload verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: newtechtransit-static-cta-fix-verification
+          path: |
+            vitrine-cta-fix.diff
+            cta-fixed-desktop.png
+            cta-fixed-tablet.png
+            cta-fixed-mobile.png
+            newtechtransit-vitrine.html
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Commit verified source and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name 'newtechai'
+          git config user.email '107279681+newtechai@users.noreply.github.com'
+          git rm .github/workflows/apply-vitrine-cta-fix.yml
+          git add newtechtransit-vitrine.html
+          git commit -m 'Corrige le chevauchement du CTA vitrine [vitrine-cta-fix-applied]'
+          git push origin HEAD:agent/fix-vitrine-cta-overlap
